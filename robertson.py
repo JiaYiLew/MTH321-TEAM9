@@ -48,3 +48,47 @@ def rhs(t: float, y: np.ndarray) -> np.ndarray:
             K1 * y1 - K3 * y2 * y3 - K2 * y2 * y2,
             K2 * y2 * y2,
         ])
+
+
+def jacobian(t: float, y: np.ndarray) -> np.ndarray:
+    """Full 3x3 analytic Jacobian J = df/dy (column sums are zero)."""
+    y1, y2, y3 = y
+    return np.array([
+        [-K1,          K3 * y3,          K3 * y2],
+        [K1,  -K3 * y3 - 2.0 * K2 * y2,  -K3 * y2],
+        [0.0,          2.0 * K2 * y2,    0.0],
+    ])
+
+
+def reduced_jacobian(y: np.ndarray) -> np.ndarray:
+    """
+    2x2 Jacobian obtained by eliminating y3 = 1 - y1 - y2.
+    Its two eigenvalues are exactly the two *nonzero* eigenvalues of the full
+    3x3 Jacobian, so the stiffness ratio is well defined from it.
+    """
+    y1, y2 = y[0], y[1]
+    y3 = 1.0 - y1 - y2
+    a = -K1 - K3 * y2
+    b = K3 * (y3 - y2)
+    c = K1 + K3 * y2
+    d = -K3 * (y3 - y2) - 2.0 * K2 * y2
+    return np.array([[a, b], [c, d]])
+
+
+def nonzero_eigenvalues(y: np.ndarray) -> np.ndarray:
+    """The two nonzero Jacobian eigenvalues (from the reduced Jacobian)."""
+    return np.linalg.eigvals(reduced_jacobian(y))
+
+
+def stiffness_ratio(y: np.ndarray, zero_tol: float = 1e-12):
+    """
+    S(t) = max|Re lam_j| / min|Re lam_j| over the two nonzero eigenvalues.
+    Returns (S, lam_fast, lam_slow). S is nan when the pair is degenerate
+    (e.g. at t = 0, where both are zero).
+    """
+    lam = nonzero_eigenvalues(y)
+    mag = np.abs(lam.real)
+    mag = np.sort(mag)[::-1]
+    if mag[-1] <= zero_tol:
+        return np.nan, mag[0], mag[-1]
+    return mag[0] / mag[-1], mag[0], mag[-1]
