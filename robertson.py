@@ -273,3 +273,98 @@ def _be_step(f, jf, t_n, y_n, h, newton_tol):
 
     w0 = y_n + h * f(t_n, y_n)
     return _newton_solve(F, J, w0, tol=newton_tol)
+
+
+def _tr_step(f, jf, t_n, y_n, h, newton_tol):
+    """One trapezoidal step with the damped-Newton solve. Returns (y, k, ok)."""
+    f_n = f(t_n, y_n)
+
+    def F(w):
+        return w - y_n - 0.5 * h * (f_n + f(t_n + h, w))
+
+    def J(w):
+        return np.eye(len(y_n)) - 0.5 * h * jf(t_n + h, w)
+
+    w0 = y_n + h * f_n
+    return _newton_solve(F, J, w0, tol=newton_tol)
+
+
+def newton_residual_trace(f, jf, t_n, y_n, h, newton_tol=1e-12, maxit=40):
+    """
+    Print ||F||_inf per Newton iteration for one implicit-Euler step.
+
+    Diagnostic for the lightning talk: on the very first Robertson step the
+    residual RISES (the initial guess y2 = 0 is degenerate, the 3e7 y2^2 term
+    is dormant) and then decays quadratically.
+    """
+    def F(w):
+        return w - y_n - h * f(t_n + h, w)
+
+    def J(w):
+        return np.eye(len(y_n)) - h * jf(t_n + h, w)
+
+    w = np.array(y_n, dtype=float)
+    hist = []
+    for k in range(maxit):
+        r = float(np.linalg.norm(F(w), np.inf))
+        hist.append(r)
+        print(f"        iter {k}: ||F||_inf = {r:.3e}")
+        if r < newton_tol:
+            break
+        w = w - np.linalg.solve(J(w), F(w))
+    return hist
+
+
+# --------------------------------------------------------------------------
+# Reference solution and output grid
+# --------------------------------------------------------------------------
+def output_grid():
+    """t = 0 plus 200 log-spaced points in [1e-8, 40]."""
+    return np.concatenate(([T0], np.logspace(np.log10(TFIRST), np.log10(T1), N_OUT)))
+
+
+def reference_solution(rtol=1e-12, atol=1e-14, method="Radau"):
+    """
+    Tight-tolerance reference on the common output grid.
+    Returns (t_grid, Y_ref) with Y_ref[i] = y(t_grid[i]).
+    """
+    t_grid = output_grid()
+    sol = solve_ivp(rhs, (T0, T1), Y0, method=method, rtol=rtol, atol=atol,
+                    t_eval=t_grid, dense_output=False)
+    return t_grid, sol.y.T
+
+
+def uniform_grid(h):
+    """Uniform grid on [0, 40] with step h (the last point is exactly T1)."""
+    n = int(round((T1 - T0) / h))
+    return np.linspace(T0, T1, n + 1)
+
+
+# --------------------------------------------------------------------------
+# Error norms (stated explicitly in the report)
+# --------------------------------------------------------------------------
+def rel_error_in_transient(Y_num, t_grid, Y_ref, t_end=1e-2):
+    """
+    Componentwise relative error at the end of the initial transient window
+    [0, t_end]: E = max_j |e_j| / |y_ref_j|.
+    """
+    idx = np.argmin(np.abs(t_grid - t_end))
+    e = Y_num[idx] - Y_ref[idx]
+    return float(np.max(np.abs(e) / np.abs(Y_ref[idx])))
+
+
+def abs_error_at_t_end(Y_num, Y_ref, idx=-1):
+    """Componentwise absolute error at the final output point (t = 40)."""
+    return float(np.max(np.abs(Y_num[idx] - Y_ref[idx])))
+
+
+def conservation_defect(Y):
+    """max_t |sum_j y_j - 1|."""
+    return float(np.max(np.abs(Y.sum(axis=1) - 1.0)))
+
+
+if __name__ == "__main__":
+    t, Y = reference_solution()
+    print("reference y(40) =", Y[-1])
+    print("conservation defect =", conservation_defect(Y))
+    print("min component =", Y.min())
