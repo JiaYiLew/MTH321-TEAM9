@@ -198,3 +198,7 @@ def trapezoidal(f, jf, y0, t_grid, newton_tol=1e-12):
         out[n + 1] = y
     return out
 
+
+
+
+
