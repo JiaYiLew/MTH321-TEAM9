@@ -92,3 +92,109 @@ def stiffness_ratio(y: np.ndarray, zero_tol: float = 1e-12):
     if mag[-1] <= zero_tol:
         return np.nan, mag[0], mag[-1]
     return mag[0] / mag[-1], mag[0], mag[-1]
+
+
+# --------------------------------------------------------------------------
+# Fixed-step integrators (all land exactly on a supplied grid)
+# --------------------------------------------------------------------------
+def explicit_euler(f, y0, t_grid):
+    y = np.array(y0, dtype=float)
+    out = np.empty((len(t_grid), len(y)))
+    out[0] = y
+    for n in range(len(t_grid) - 1):
+        h = t_grid[n + 1] - t_grid[n]
+        y = y + h * f(t_grid[n], y)
+        out[n + 1] = y
+    return out
+
+
+def heun(f, y0, t_grid):
+    """Explicit RK2 (Heun) — order 2."""
+    y = np.array(y0, dtype=float)
+    out = np.empty((len(t_grid), len(y)))
+    out[0] = y
+    for n in range(len(t_grid) - 1):
+        h = t_grid[n + 1] - t_grid[n]
+        t_n = t_grid[n]
+        k1 = f(t_n, y)
+        k2 = f(t_n + h, y + h * k1)
+        y = y + 0.5 * h * (k1 + k2)
+        out[n + 1] = y
+    return out
+
+
+def _newton_solve(F, J, w0, tol=1e-12, maxit=50):
+    """
+    Damped Newton for F(w) = 0 with Jacobian J(w).
+    Damping alpha is halved while the residual fails to decrease.
+    Returns (w, iterations, converged).
+    """
+    w = np.array(w0, dtype=float)
+    res = np.linalg.norm(F(w), np.inf)
+    for it in range(maxit):
+        if res < tol:
+            return w, it, True
+        delta = np.linalg.solve(J(w), -F(w))
+        alpha = 1.0
+        for _ in range(30):
+            w_try = w + alpha * delta
+            res_try = np.linalg.norm(F(w_try), np.inf)
+            if res_try < res:
+                break
+            alpha *= 0.5
+        else:
+            return w, it, False
+        w, res = w_try, res_try
+    return w, maxit, res < tol
+
+
+def backward_euler(f, jf, y0, t_grid, newton_tol=1e-12):
+    """
+    Implicit (backward) Euler with a damped-Newton solve and the analytic
+    Jacobian:  F(w) = w - y_n - h f(t_{n+1}, w) = 0,  J_F = I - h J_f.
+    """
+    y = np.array(y0, dtype=float)
+    out = np.empty((len(t_grid), len(y)))
+    iters = np.zeros(len(t_grid) - 1, dtype=int)
+    out[0] = y
+    for n in range(len(t_grid) - 1):
+        h = t_grid[n + 1] - t_grid[n]
+        t_next = t_grid[n + 1]
+
+        def F(w):
+            return w - y - h * f(t_next, w)
+
+        def J(w):
+            return np.eye(len(y)) - h * jf(t_next, w)
+
+        w0 = y + h * f(t_grid[n], y)          # explicit-Euler predictor
+        y, k, _ = _newton_solve(F, J, w0, tol=newton_tol)
+        iters[n] = k
+        out[n + 1] = y
+    return out, iters
+
+
+def trapezoidal(f, jf, y0, t_grid, newton_tol=1e-12):
+    """
+    Implicit trapezoidal rule (A-stable, order 2 — but NOT L-stable):
+      w = y_n + h/2 (f(t_n, y_n) + f(t_{n+1}, w)).
+    """
+    y = np.array(y0, dtype=float)
+    out = np.empty((len(t_grid), len(y)))
+    out[0] = y
+    for n in range(len(t_grid) - 1):
+        h = t_grid[n + 1] - t_grid[n]
+        t_n, t_next = t_grid[n], t_grid[n + 1]
+        f_n = f(t_n, y)
+
+        def F(w):
+            return w - y - 0.5 * h * (f_n + f(t_next, w))
+
+        def J(w):
+            return np.eye(len(y)) - 0.5 * h * jf(t_next, w)
+
+        w0 = y + h * f_n
+        y, _, _ = _newton_solve(F, J, w0, tol=newton_tol)
+        out[n + 1] = y
+    return out
+
