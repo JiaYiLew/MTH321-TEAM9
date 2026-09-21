@@ -199,6 +199,79 @@ def trapezoidal(f, jf, y0, t_grid, newton_tol=1e-12):
     return out
 
 
+# --------------------------------------------------------------------------
+# Adaptive step-size control (step doubling)
+#
+# This is the deep-work solver from the Week-2 scaffold, generalised so it
+# works for any one-step method and any system. The step is driven by the
+# method's own local-error signal instead of staying fixed:
+#
+#     y_coarse = one  step of size h
+#     y_fine   = two  steps of size h/2
+#     e = ||y_fine - y_coarse||      (an O(h^{p+1}) local-error estimate)
+#
+# Controller: accept if e <= tol; halve h if e > tol; double h (up to h0) if
+# e < tol/10. Accept y_fine, the more accurate of the two candidates.
+# --------------------------------------------------------------------------
+def adaptive_implicit_euler(f, jf, y0, t0, t1, h0, tol,
+                            newton_tol=1e-12, max_steps=200000,
+                            method="backward_euler"):
+    """
+    Step-doubling adaptive implicit solver.
 
+    method='backward_euler' (order 1, L-stable) or 'trapezoidal' (order 2,
+    A-stable but not L-stable). The order-2 method buys much more per step,
+    so its controller is the more convincing demonstration of adaptivity.
+
+    Returns (t, y, h_used, n_rejected) where t is the accepted grid, y the
+    solution on it, and h_used the step actually taken at each accepted step
+    (len(h_used) + 1 == len(t)).
+    """
+    step_fn = _be_step if method == "backward_euler" else _tr_step
+
+    t = [t0]
+    y = [np.array(y0, dtype=float)]
+    h_used = []
+    h = min(h0, t1 - t0)
+    n_rejected = 0
+
+    for _ in range(max_steps):
+        if t[-1] >= t1:
+            break
+        h = min(h, t1 - t[-1])            # never overshoot the end
+
+        y_coarse, _, ok1 = step_fn(f, jf, t[-1], y[-1], h, newton_tol)
+        y_half, _, ok2 = step_fn(f, jf, t[-1], y[-1], 0.5 * h, newton_tol)
+        y_fine, _, ok3 = step_fn(f, jf, t[-1] + 0.5 * h, y_half, 0.5 * h, newton_tol)
+
+        if not (ok1 and ok2 and ok3):
+            h *= 0.5
+            n_rejected += 1
+            continue
+
+        e = float(np.linalg.norm(y_fine - y_coarse, np.inf))
+        if e <= tol:
+            t.append(t[-1] + h)
+            y.append(y_fine)
+            h_used.append(h)
+            if e < tol / 10.0:            # comfortably inside budget: grow
+                h = min(h0, 2.0 * h)
+        else:
+            h *= 0.5                      # over budget: shrink and retry
+            n_rejected += 1
+
+    return np.array(t), np.array(y), np.array(h_used), n_rejected
+
+
+def _be_step(f, jf, t_n, y_n, h, newton_tol):
+    """One backward-Euler step with the damped-Newton solve. Returns (y, k, ok)."""
+    def F(w):
+        return w - y_n - h * f(t_n + h, w)
+
+    def J(w):
+        return np.eye(len(y_n)) - h * jf(t_n + h, w)
+
+    w0 = y_n + h * f(t_n, y_n)
+    return _newton_solve(F, J, w0, tol=newton_tol)
 
 
