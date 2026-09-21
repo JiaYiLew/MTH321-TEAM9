@@ -273,4 +273,3 @@ def _be_step(f, jf, t_n, y_n, h, newton_tol):
 
     w0 = y_n + h * f(t_n, y_n)
     return _newton_solve(F, J, w0, tol=newton_tol)
-
